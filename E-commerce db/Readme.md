@@ -10,7 +10,7 @@
 
 ## 1. Project Overview
 
-ShopSphere is a relational database designed to model the core operations of an e-commerce platform — customers, products, categories, suppliers, orders, payments, shipments, and reviews. The schema is built entirely on `AUTO_INCREMENT` primary keys and foreign key constraints, enforcing referential integrity between every related table via `ON DELETE` / `ON UPDATE` rules.
+This is a relational database designed to model the core operations of an e-commerce platform — customers, products, categories, suppliers, orders, payments, shipments, and reviews. The schema is built entirely on `AUTO_INCREMENT` primary keys and foreign key constraints, enforcing referential integrity between every related table via `ON DELETE` / `ON UPDATE` rules.
 
 The design captures the full lifecycle of a purchase: a customer browses a catalog of products (each tied to a category and supplier), places an order containing one or more line items, pays for it, and has it shipped — with the option to leave a review afterward.
 
