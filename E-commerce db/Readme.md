@@ -1,4 +1,4 @@
-# ShopSphere E-Commerce Retail Database System
+# E-Commerce Retail Database System
 
 **Student Name:** M Sai Charan Tej
 **Register Number:** ASML25012
