@@ -38,7 +38,7 @@ OrderStatus moves through placed → packed → shipped → out_for_delivery →
 OrderDate is stamped automatically on insert, so there's no manual date entry needed for order history.
 
 4. Sample Data
-The sample dataset used for testing this module is small on purpose — just enough to exercise every join:
+The sample dataset used for testing this module is small on purpose just enough to exercise every join:
 2 categories, 2 suppliers, 2 customers, 3 products
 3 orders (one of each: placed, shipped, delivered)
 4 order line items across those 3 orders (one order has 2 products)
