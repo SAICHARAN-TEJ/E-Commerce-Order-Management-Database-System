@@ -16,18 +16,21 @@ This folder holds the Order Management part of the e-commerce database project. 
 In short: given the Orders, Customer, OrderItems, and Product tables, this module answers "who ordered what, when, how much, and what's the status."
 
 2. Tables Involved
-Table Name	Purpose	Key Constraints
-Customer	Customer accounts and contact info	CustomerID (PK), Email (Unique)
-Orders	Order header customer, date, status	OrderID (PK), CustomerID (FK)
-OrderItems	Line items within an order	OrderItemID (PK), OrderID (FK), ProductID (FK)
-Product	Product catalog referenced by order items	ProductID (PK), CategoryID (FK), SupplierID (FK)
+
+  Table Name	Purpose	Key Constraints
+  Customer	Customer accounts and contact info	CustomerID (PK), Email (Unique)
+  Orders	Order header customer, date, status	OrderID (PK), CustomerID (FK)
+  OrderItems	Line items within an order	OrderItemID (PK), OrderID (FK), ProductID (FK)
+  Product	Product catalog referenced by order items	ProductID (PK), CategoryID (FK), SupplierID (FK)
 
 Relationships
-A customer can place many orders (1:N).
-An order can contain many order items (1:N).
-A product can show up as a line item in many different orders (1:N).
 
-Orders cascades on delete/update from Customer, and OrderItems cascades from Orders so deleting a customer or an order cleans up everything under it. OrderItems.ProductID is the one exception: it's ON DELETE RESTRICT, so you can't delete a product that's already part of someone's order history.
+  A customer can place many orders (1:N).
+  An order can contain many order items (1:N).
+  A product can show up as a line item in many different orders (1:N).
+
+Orders cascades on delete/update from Customer, and OrderItems cascades from Orders so deleting a customer or an order cleans up everything under it. 
+OrderItems.ProductID is the one exception: it's ON DELETE RESTRICT, so you can't delete a product that's already part of someone's order history.
 
 3. A Few Design Choices Worth Noting
 PriceAtPurchase is stored on OrderItems instead of just pulling the live Product.Price that way if a product's price changes later, old orders still show what the customer actually paid.
