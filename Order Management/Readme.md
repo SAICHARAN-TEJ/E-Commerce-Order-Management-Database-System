@@ -48,5 +48,6 @@ Since one order can have multiple products, an order with 2 items shows up as 2 
 Ran clean in MySQL Workbench, no errors. Checked the output against the sample data above and the row counts matched what was expected.
 
 Result:
+
 <img width="854" height="285" alt="image" src="https://github.com/user-attachments/assets/54ed6f4f-a0d5-45f0-8c49-1c52388f8c2d" />
 
