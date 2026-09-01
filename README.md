@@ -1,9 +1,13 @@
 # E-Commerce Order Management Database System
  
 **Student Name:** M Sai Charan Tej
+
 **Register Number:** ASML25012
+
 **Project Type:** Relational Database Management System (RDBMS)
+
 **Database Engine:** MySQL
+
 **Database Name:** `ecommerce_db`
  
 ---
