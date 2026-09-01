@@ -67,3 +67,16 @@ Customer ──< Orders ──1:1── Payment
 ## 6. Execution & Verification
 
 The SQL script was executed successfully in MySQL against the existing `ecommerce_db` schema, with the `Payment` table and its foreign key to `Orders` created and verified without errors.
+
+## Proof :
+<img width="1046" height="142" alt="image" src="https://github.com/user-attachments/assets/11d43f96-3189-4221-8397-748b1ffbcef8" />
+
+<img width="674" height="85" alt="image" src="https://github.com/user-attachments/assets/93b7e98c-363b-4509-a8fb-970a5a665717" />
+
+<img width="676" height="176" alt="image" src="https://github.com/user-attachments/assets/25fb9586-1d96-4e10-848a-d011514b1bbc" />
+
+<img width="677" height="78" alt="image" src="https://github.com/user-attachments/assets/8e510d80-8ad1-46d4-bf18-d8824c67786c" />
+
+
+
+
