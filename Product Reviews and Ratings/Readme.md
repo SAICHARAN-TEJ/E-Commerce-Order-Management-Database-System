@@ -1,6 +1,14 @@
 Product Review and Rating Sub-System
 
-Student Name: [your name] Register Number: [your register number] Component Type: Relational Database Sub-Module Database Engine: MySQL Database Name: ecommerce_db
+Student Name: M Sai Charan Tej
+
+Register Number: ASML25012
+
+Component Type: Relational Database Sub-Module
+
+Database Engine: MySQL
+
+Database Name: ecommerce_db
 
 1. Overview
 
