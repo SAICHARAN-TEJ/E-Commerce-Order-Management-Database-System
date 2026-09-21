@@ -9,6 +9,7 @@
 **Database Engine:** MySQL
 
 **Database Name:** `ecommerce_db`
+
 ---
  
 ## 1. Purpose
