@@ -18,10 +18,6 @@ SQL analytics for an e-commerce database. Uses aggregate functions, grouping and
  
 The management team wants to know who the top customers are, which products sell best, and which categories earn the most. This project answers those questions with plain MySQL queries on the existing `ecommerce_db` database.
  
-## Tech Stack
- 
-- MySQL 8+
-- MySQL Workbench or the `mysql` command-line client
 ## Tables Used
  
 | Table | Used for |
@@ -96,6 +92,15 @@ LIMIT 5;
 - Revenue is calculated from all orders, including cancelled ones. To exclude them, add `WHERE OrderStatus <> 'cancelled'`.
 - The date range query uses July to August 2026. Edit the dates to match your data.
 - The high-value customer cutoff is set to 3000. Adjust it as needed.
+
+
+
+## Proof:
+<img width="1043" height="305" alt="image" src="https://github.com/user-attachments/assets/55cf6fc2-9ced-4123-950b-51c150768754" />
+<img width="1049" height="392" alt="image" src="https://github.com/user-attachments/assets/7cc44c8d-310d-4a26-b51c-54fbb6a4c975" />
+<img width="1054" height="262" alt="image" src="https://github.com/user-attachments/assets/94f5ed18-26b3-4428-8c25-2299593eb069" />
+
+
 ## Author
  
 **SAICHARAN-TEJ**
