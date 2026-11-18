@@ -1,0 +1,130 @@
+USE ecommerce_db;
+
+-- demo order: customer 1 buys one Microwave Oven (ProductID 8)
+SET @cust = 1, @prod = 8, @qty = 1;
+SELECT Price INTO @price FROM Product WHERE ProductID = @prod;
+SELECT StockQuantity INTO @stock_start FROM Product WHERE ProductID = @prod;
+
+
+-- 1. successful order: paid by UPI
+START TRANSACTION;
+
+SELECT StockQuantity FROM Product WHERE ProductID = @prod FOR UPDATE;
+
+INSERT INTO Orders (CustomerID, TotalAmount) VALUES (@cust, @price * @qty);
+SET @order_ok = LAST_INSERT_ID();
+
+INSERT INTO OrderItems (OrderID, ProductID, Quantity, PriceAtPurchase)
+VALUES (@order_ok, @prod, @qty, @price);
+
+UPDATE Product SET StockQuantity = StockQuantity - @qty WHERE ProductID = @prod;
+
+INSERT INTO Payment (OrderID, PaymentMethod, PaymentStatus, AmountPaid)
+VALUES (@order_ok, 'upi', 'success', @price * @qty);
+
+UPDATE Orders SET OrderStatus = 'packed' WHERE OrderID = @order_ok;
+
+COMMIT;
+
+
+-- 2. failed payment, everything is undone
+START TRANSACTION;
+
+INSERT INTO Orders (CustomerID, TotalAmount) VALUES (@cust, @price * @qty);
+SET @order_rb = LAST_INSERT_ID();
+
+INSERT INTO OrderItems (OrderID, ProductID, Quantity, PriceAtPurchase)
+VALUES (@order_rb, @prod, @qty, @price);
+
+UPDATE Product SET StockQuantity = StockQuantity - @qty WHERE ProductID = @prod;
+
+INSERT INTO Payment (OrderID, PaymentMethod, PaymentStatus, AmountPaid)
+VALUES (@order_rb, 'upi', 'failed', 0.00);
+
+ROLLBACK;
+
+SELECT * FROM Orders WHERE OrderID = @order_rb;
+SELECT ProductID, StockQuantity FROM Product WHERE ProductID = @prod;
+
+
+-- 3. failed payment, order kept as cancelled and stock restored
+START TRANSACTION;
+
+INSERT INTO Orders (CustomerID, TotalAmount) VALUES (@cust, @price * @qty);
+SET @order_fail = LAST_INSERT_ID();
+
+INSERT INTO OrderItems (OrderID, ProductID, Quantity, PriceAtPurchase)
+VALUES (@order_fail, @prod, @qty, @price);
+
+UPDATE Product SET StockQuantity = StockQuantity - @qty WHERE ProductID = @prod;
+
+INSERT INTO Payment (OrderID, PaymentMethod, PaymentStatus, AmountPaid)
+VALUES (@order_fail, 'upi', 'failed', 0.00);
+
+UPDATE Product SET StockQuantity = StockQuantity + @qty WHERE ProductID = @prod;
+
+UPDATE Orders SET OrderStatus = 'cancelled' WHERE OrderID = @order_fail;
+
+COMMIT;
+
+
+-- 4. ACID
+-- atomicity: see 2 (rollback) and 3 (cancel), nothing is half saved
+-- durability: the committed order from 1 is still there after restarting mysql
+SELECT * FROM Orders WHERE OrderID = @order_ok;
+
+-- isolation: run in two separate sessions
+-- session 1: START TRANSACTION; SELECT StockQuantity FROM Product WHERE ProductID = 8 FOR UPDATE;
+-- session 2: same select, it waits until session 1 does COMMIT
+
+-- consistency: the last statement in this file (it errors on purpose)
+
+
+-- 5. consistency checks (every query should come back empty)
+SELECT o.* FROM Orders o
+LEFT JOIN Customer c ON c.CustomerID = o.CustomerID
+WHERE c.CustomerID IS NULL;
+
+SELECT p.* FROM Payment p
+LEFT JOIN Orders o ON o.OrderID = p.OrderID
+WHERE o.OrderID IS NULL;
+
+SELECT * FROM Product WHERE StockQuantity < 0;
+
+SELECT o.OrderID, o.OrderStatus FROM Orders o
+LEFT JOIN Payment p ON p.OrderID = o.OrderID AND (p.PaymentStatus = 'success' OR p.PaymentMethod = 'cash_on_delivery')
+WHERE o.OrderStatus IN ('packed', 'shipped', 'out_for_delivery', 'delivered') AND p.PaymentID IS NULL;
+
+SELECT o.OrderID FROM Orders o
+JOIN Payment p ON p.OrderID = o.OrderID
+WHERE o.OrderStatus = 'cancelled' AND p.PaymentStatus = 'success';
+
+SELECT o.OrderID, o.TotalAmount, SUM(oi.Quantity * oi.PriceAtPurchase) AS ItemsTotal
+FROM Orders o JOIN OrderItems oi ON oi.OrderID = o.OrderID
+GROUP BY o.OrderID, o.TotalAmount
+HAVING o.TotalAmount <> SUM(oi.Quantity * oi.PriceAtPurchase);
+
+
+-- report 1: order transactions (this run)
+SELECT o.OrderID, c.Name AS CustomerName, o.TotalAmount, p.PaymentStatus, o.OrderStatus
+FROM Orders o
+JOIN Customer c ON c.CustomerID = o.CustomerID
+LEFT JOIN Payment p ON p.OrderID = o.OrderID
+WHERE o.OrderID >= @order_ok;
+
+-- report 2: failed transactions
+SELECT o.OrderID, p.PaymentStatus, o.OrderStatus, pr.Name AS ProductName, oi.Quantity AS StockRestored
+FROM Orders o
+JOIN Payment p ON p.OrderID = o.OrderID
+JOIN OrderItems oi ON oi.OrderID = o.OrderID
+JOIN Product pr ON pr.ProductID = oi.ProductID
+WHERE o.OrderStatus = 'cancelled' OR p.PaymentStatus = 'failed';
+
+-- report 3: inventory update (this run)
+SELECT Name AS ProductName, @stock_start AS PreviousStock, StockQuantity AS CurrentStock,
+       @stock_start - StockQuantity AS QuantitySold
+FROM Product WHERE ProductID = @prod;
+
+
+-- consistency demo: stock can't go negative (error 3819 is the expected result)
+UPDATE Product SET StockQuantity = StockQuantity - 100000 WHERE ProductID = @prod;
