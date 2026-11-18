@@ -1,0 +1,94 @@
+USE ecommerce_db;
+
+-- 1. users and roles (demo passwords, change them for anything real)
+CREATE ROLE IF NOT EXISTS admin_role, sales_role, inventory_role, support_role;
+
+CREATE USER IF NOT EXISTS 'admin_user'@'localhost' IDENTIFIED BY 'Admin@123';
+CREATE USER IF NOT EXISTS 'sales_user'@'localhost' IDENTIFIED BY 'Sales@123';
+CREATE USER IF NOT EXISTS 'inventory_user'@'localhost' IDENTIFIED BY 'Inventory@123';
+CREATE USER IF NOT EXISTS 'support_user'@'localhost' IDENTIFIED BY 'Support@123';
+
+-- 2. grant permissions to roles
+GRANT ALL ON ecommerce_db.* TO admin_role;
+GRANT CREATE USER ON *.* TO admin_role;
+
+GRANT SELECT ON ecommerce_db.Orders TO sales_role;
+GRANT SELECT ON ecommerce_db.OrderItems TO sales_role;
+GRANT SELECT ON ecommerce_db.Product TO sales_role;
+
+GRANT SELECT ON ecommerce_db.Product TO inventory_role;
+GRANT UPDATE (StockQuantity) ON ecommerce_db.Product TO inventory_role;
+
+-- support sees customers and orders, but never the Password column
+GRANT SELECT (CustomerID, Name, Email, Phone, Address, RegistrationDate) ON ecommerce_db.Customer TO support_role;
+GRANT SELECT ON ecommerce_db.Orders TO support_role;
+
+GRANT admin_role TO 'admin_user'@'localhost';
+GRANT sales_role TO 'sales_user'@'localhost';
+GRANT inventory_role TO 'inventory_user'@'localhost';
+GRANT support_role TO 'support_user'@'localhost';
+SET DEFAULT ROLE ALL TO 'admin_user'@'localhost', 'sales_user'@'localhost',
+                        'inventory_user'@'localhost', 'support_user'@'localhost';
+
+-- revoke demo
+GRANT INSERT ON ecommerce_db.Payment TO 'sales_user'@'localhost';
+SHOW GRANTS FOR 'sales_user'@'localhost';
+REVOKE INSERT ON ecommerce_db.Payment FROM 'sales_user'@'localhost';
+SHOW GRANTS FOR 'sales_user'@'localhost';
+
+-- 3. access test (log in as each user in a new connection, e.g. mysql -u sales_user -p ecommerce_db)
+-- sales_user:     SELECT * FROM Orders LIMIT 5;                                                works
+-- sales_user:     INSERT INTO Payment (OrderID, PaymentMethod, AmountPaid) VALUES (1,'upi',1); error 1142
+-- inventory_user: UPDATE Product SET StockQuantity = 50 WHERE ProductID = 10;                  works
+-- inventory_user: UPDATE Product SET Price = 1 WHERE ProductID = 10;                           error 1143
+-- support_user:   SELECT CustomerID, Name, Email FROM Customer LIMIT 5;                        works
+-- support_user:   SELECT Password FROM Customer;                                               error 1143
+-- support_user:   SELECT * FROM Payment;                                                       error 1142
+
+-- student questions
+-- 1. full access to everyone means anyone can change or delete data by mistake or on purpose
+-- 2. payment data leaks or gets tampered with, which causes fraud and legal trouble
+-- 3. permissions are given to a role once, so users only get what their job needs and it is easy to manage
+
+
+-- 4. performance
+DROP PROCEDURE IF EXISTS sp_add_index;
+DELIMITER //
+CREATE PROCEDURE sp_add_index(IN p_table VARCHAR(64), IN p_index VARCHAR(64), IN p_cols VARCHAR(200))
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                   WHERE table_schema = DATABASE() AND table_name = p_table AND index_name = p_index) THEN
+        SET @ddl = CONCAT('CREATE INDEX ', p_index, ' ON ', p_table, '(', p_cols, ')');
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END //
+DELIMITER ;
+
+-- before indexes
+EXPLAIN ANALYZE SELECT * FROM Product WHERE Name = 'Air Fryer 4L';
+EXPLAIN ANALYZE SELECT * FROM Customer WHERE Phone = '9000011111';
+EXPLAIN ANALYZE SELECT * FROM Orders WHERE OrderDate BETWEEN '2026-07-01' AND '2026-07-31';
+
+-- foreign keys and UNIQUE columns (CategoryID, CustomerID, Email) already have indexes, so only these three are new
+CALL sp_add_index('Product', 'idx_product_name', 'Name');
+CALL sp_add_index('Customer', 'idx_customer_phone', 'Phone');
+CALL sp_add_index('Orders', 'idx_order_date', 'OrderDate');
+DROP PROCEDURE sp_add_index;
+
+-- after indexes
+EXPLAIN ANALYZE SELECT * FROM Product WHERE Name = 'Air Fryer 4L';
+EXPLAIN ANALYZE SELECT * FROM Customer WHERE Phone = '9000011111';
+EXPLAIN ANALYZE SELECT * FROM Orders WHERE OrderDate BETWEEN '2026-07-01' AND '2026-07-31';
+
+
+-- report 1: user access
+SELECT User, Host FROM mysql.user WHERE User LIKE '%\_user';
+SELECT FROM_USER AS RoleName, TO_USER AS UserName FROM mysql.role_edges WHERE FROM_USER LIKE '%\_role';
+
+-- report 2: security (granted and revoked)
+SHOW GRANTS FOR 'admin_user'@'localhost' USING admin_role;
+SHOW GRANTS FOR 'sales_user'@'localhost' USING sales_role;
+SHOW GRANTS FOR 'inventory_user'@'localhost' USING inventory_role;
+SHOW GRANTS FOR 'support_user'@'localhost' USING support_role;
