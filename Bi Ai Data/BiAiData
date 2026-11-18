@@ -1,0 +1,115 @@
+USE ecommerce_db;
+
+-- helper views (cancelled and returned orders don't count as sales)
+CREATE OR REPLACE VIEW customer_stats AS
+SELECT c.CustomerID, c.Name AS CustomerName,
+       DATEDIFF(CURDATE(), DATE(c.RegistrationDate)) AS TenureDays,
+       COUNT(o.OrderID) AS TotalOrders,
+       IFNULL(SUM(o.TotalAmount), 0) AS TotalSpending,
+       IFNULL(AVG(o.TotalAmount), 0) AS AvgOrderValue,
+       MIN(CAST(o.OrderDate AS DATETIME)) AS FirstPurchase,
+       MAX(CAST(o.OrderDate AS DATETIME)) AS LastPurchase
+FROM Customer c
+LEFT JOIN Orders o ON o.CustomerID = c.CustomerID AND o.OrderStatus NOT IN ('cancelled', 'returned')
+GROUP BY c.CustomerID, c.Name, c.RegistrationDate;
+
+CREATE OR REPLACE VIEW product_sales AS
+SELECT p.ProductID, p.Name AS ProductName, p.CategoryID,
+       IFNULL(SUM(s.Quantity), 0) AS QtySold,
+       IFNULL(SUM(s.Quantity * s.PriceAtPurchase), 0) AS Revenue
+FROM Product p
+LEFT JOIN (SELECT oi.ProductID, oi.Quantity, oi.PriceAtPurchase
+           FROM OrderItems oi JOIN Orders o ON o.OrderID = oi.OrderID
+           WHERE o.OrderStatus NOT IN ('cancelled', 'returned')) s ON s.ProductID = p.ProductID
+GROUP BY p.ProductID, p.Name, p.CategoryID;
+
+
+-- 1. analytical reports
+SELECT SUM(TotalAmount) AS TotalSales, COUNT(*) AS TotalOrders, ROUND(AVG(TotalAmount), 2) AS AvgOrderValue
+FROM Orders WHERE OrderStatus NOT IN ('cancelled', 'returned');
+
+SELECT DATE_FORMAT(OrderDate, '%Y-%m') AS SalesMonth, SUM(TotalAmount) AS Revenue
+FROM Orders WHERE OrderStatus NOT IN ('cancelled', 'returned')
+GROUP BY SalesMonth ORDER BY SalesMonth;
+
+SELECT CustomerName, TotalSpending AS TotalPurchases, TotalOrders, LastPurchase
+FROM customer_stats WHERE TotalOrders > 0 ORDER BY TotalSpending DESC;
+
+SELECT ProductName, QtySold, Revenue, RANK() OVER (ORDER BY Revenue DESC) AS ProductRank
+FROM product_sales;
+
+
+-- 2. window functions
+SELECT ProductName, QtySold, RANK() OVER (ORDER BY QtySold DESC) AS SalesRank
+FROM product_sales;
+
+SELECT CustomerName, TotalSpending, DENSE_RANK() OVER (ORDER BY TotalSpending DESC) AS SpendingRank
+FROM customer_stats;
+
+SELECT OrderID, CustomerID, OrderDate, ROW_NUMBER() OVER (ORDER BY OrderDate DESC, OrderID DESC) AS OrderSeq
+FROM Orders;
+
+
+-- 3. customer segmentation (amounts are in rupees, tune them to your data)
+CREATE OR REPLACE VIEW customer_segments AS
+SELECT CustomerID, CustomerName, TotalSpending, TotalOrders,
+       CASE WHEN TotalSpending >= 5000 THEN 'Premium'
+            WHEN TotalSpending >= 1500 THEN 'Regular'
+            ELSE 'Low' END AS Segment
+FROM customer_stats;
+
+SELECT * FROM customer_segments ORDER BY TotalSpending DESC;
+
+
+-- 4. ai ready dataset
+CREATE OR REPLACE VIEW customer_pref_category AS
+SELECT CustomerID, CategoryID FROM (
+    SELECT o.CustomerID, p.CategoryID,
+           ROW_NUMBER() OVER (PARTITION BY o.CustomerID ORDER BY SUM(oi.Quantity) DESC, p.CategoryID) AS rn
+    FROM Orders o
+    JOIN OrderItems oi ON oi.OrderID = o.OrderID
+    JOIN Product p ON p.ProductID = oi.ProductID
+    WHERE o.OrderStatus NOT IN ('cancelled', 'returned')
+    GROUP BY o.CustomerID, p.CategoryID
+) t WHERE rn = 1;
+
+DROP TABLE IF EXISTS ml_customer_dataset;
+
+CREATE TABLE ml_customer_dataset AS
+SELECT s.CustomerID,
+       s.TenureDays,
+       s.TotalOrders AS TotalPurchases,
+       s.TotalSpending,
+       ROUND(s.AvgOrderValue, 2) AS AverageOrderValue,
+       IFNULL(ROUND(s.TotalOrders / GREATEST(TIMESTAMPDIFF(MONTH, s.FirstPurchase, s.LastPurchase), 1), 2), 0) AS PurchaseFrequency,
+       IFNULL(pc.CategoryID, 0) AS PreferredCategory
+FROM customer_stats s
+LEFT JOIN customer_pref_category pc ON pc.CustomerID = s.CustomerID;
+
+SELECT CustomerID, COUNT(*) FROM ml_customer_dataset GROUP BY CustomerID HAVING COUNT(*) > 1;
+SELECT * FROM ml_customer_dataset LIMIT 10;
+
+
+-- 5. feature extraction
+SELECT CustomerID, TotalOrders, TotalSpending, AvgOrderValue, LastPurchase FROM customer_stats;
+
+SELECT ps.ProductID, ps.ProductName, ps.QtySold AS TotalSalesQty,
+       (SELECT ROUND(AVG(Rating), 2) FROM Review WHERE ProductID = ps.ProductID) AS AvgRating,
+       ps.Revenue, p.StockQuantity
+FROM product_sales ps JOIN Product p ON p.ProductID = ps.ProductID;
+
+SELECT OrderID, CustomerID, YEAR(OrderDate) AS Yr, MONTH(OrderDate) AS Mon, DAY(OrderDate) AS Dy
+FROM Orders;
+
+
+-- reports
+-- report 1: customer segmentation
+SELECT Segment, COUNT(*) AS Customers, ROUND(AVG(TotalOrders), 1) AS AvgOrders, SUM(TotalSpending) AS TotalSpending
+FROM customer_segments GROUP BY Segment;
+
+-- report 2: sales ranking
+SELECT ProductName, QtySold AS TotalSales, RANK() OVER (ORDER BY QtySold DESC) AS SalesRank
+FROM product_sales;
+
+-- report 3: ai dataset structure
+DESCRIBE ml_customer_dataset;
