@@ -1,0 +1,229 @@
+USE ecommerce_db;
+
+-- 1. check minimum data (tables and data come from earlier weeks)
+SELECT 'Customer' AS TableName, COUNT(*) AS Records, 50 AS Minimum, IF(COUNT(*) >= 50, 'OK', 'SHORT') AS Status FROM Customer
+UNION ALL SELECT 'Product', COUNT(*), 100, IF(COUNT(*) >= 100, 'OK', 'SHORT') FROM Product
+UNION ALL SELECT 'Supplier', COUNT(*), 20, IF(COUNT(*) >= 20, 'OK', 'SHORT') FROM Supplier
+UNION ALL SELECT 'Orders', COUNT(*), 100, IF(COUNT(*) >= 100, 'OK', 'SHORT') FROM Orders
+UNION ALL SELECT 'Payment', COUNT(*), 100, IF(COUNT(*) >= 100, 'OK', 'SHORT') FROM Payment
+UNION ALL SELECT 'Review', COUNT(*), 50, IF(COUNT(*) >= 50, 'OK', 'SHORT') FROM Review;
+
+
+-- 2. basic queries
+SELECT Name, Price FROM Product
+WHERE Price BETWEEN 1000 AND 6000 AND Name LIKE '%Wireless%'
+ORDER BY Price DESC;
+
+SELECT DISTINCT OrderStatus FROM Orders;
+
+-- intermediate
+SELECT c.Name, COUNT(o.OrderID) AS Orders, SUM(o.TotalAmount) AS Spent
+FROM Customer c JOIN Orders o ON o.CustomerID = c.CustomerID
+GROUP BY c.CustomerID, c.Name
+HAVING COUNT(o.OrderID) >= 2;
+
+-- advanced
+SELECT Name, Price FROM Product WHERE Price > (SELECT AVG(Price) FROM Product);
+
+SELECT Name FROM Customer
+WHERE CustomerID IN (SELECT CustomerID FROM Orders
+                     WHERE OrderID IN (SELECT OrderID FROM OrderItems WHERE ProductID = 3));
+
+
+-- 3. views (cancelled and returned orders don't count as sales)
+CREATE OR REPLACE VIEW v_customer_order_history AS
+SELECT c.CustomerID, c.Name AS CustomerName, o.OrderID, o.OrderDate, o.TotalAmount, o.OrderStatus
+FROM Customer c JOIN Orders o ON o.CustomerID = c.CustomerID;
+
+CREATE OR REPLACE VIEW v_sales_report AS
+SELECT DATE_FORMAT(OrderDate, '%Y-%m') AS SalesMonth, COUNT(*) AS Orders, SUM(TotalAmount) AS Revenue
+FROM Orders WHERE OrderStatus NOT IN ('cancelled', 'returned')
+GROUP BY SalesMonth;
+
+CREATE OR REPLACE VIEW v_product_performance AS
+SELECT p.ProductID, p.Name AS ProductName, p.CategoryID,
+       IFNULL(SUM(s.Quantity), 0) AS QtySold,
+       IFNULL(SUM(s.Quantity * s.PriceAtPurchase), 0) AS Revenue
+FROM Product p
+LEFT JOIN (SELECT oi.ProductID, oi.Quantity, oi.PriceAtPurchase
+           FROM OrderItems oi JOIN Orders o ON o.OrderID = oi.OrderID
+           WHERE o.OrderStatus NOT IN ('cancelled', 'returned')) s ON s.ProductID = p.ProductID
+GROUP BY p.ProductID, p.Name, p.CategoryID;
+
+SELECT ProductName, Revenue, RANK() OVER (ORDER BY Revenue DESC) AS RevenueRank
+FROM v_product_performance;
+
+
+-- 4. functions
+DROP FUNCTION IF EXISTS fn_customer_spending;
+CREATE FUNCTION fn_customer_spending(p_id INT) RETURNS DECIMAL(12,2) READS SQL DATA
+RETURN (SELECT IFNULL(SUM(TotalAmount), 0) FROM Orders
+        WHERE CustomerID = p_id AND OrderStatus NOT IN ('cancelled', 'returned'));
+
+DROP FUNCTION IF EXISTS fn_product_revenue;
+CREATE FUNCTION fn_product_revenue(p_id INT) RETURNS DECIMAL(12,2) READS SQL DATA
+RETURN (SELECT IFNULL(SUM(oi.Quantity * oi.PriceAtPurchase), 0)
+        FROM OrderItems oi JOIN Orders o ON o.OrderID = oi.OrderID
+        WHERE oi.ProductID = p_id AND o.OrderStatus NOT IN ('cancelled', 'returned'));
+
+
+-- 5. procedures
+DROP PROCEDURE IF EXISTS sp_update_stock;
+CREATE PROCEDURE sp_update_stock(IN p_prod INT, IN p_qty INT)
+UPDATE Product SET StockQuantity = StockQuantity + p_qty WHERE ProductID = p_prod;
+
+DROP PROCEDURE IF EXISTS sp_sales_total;
+CREATE PROCEDURE sp_sales_total(IN p_from DATE, IN p_to DATE)
+SELECT SUM(TotalAmount) AS TotalSales, COUNT(*) AS TotalOrders
+FROM Orders
+WHERE OrderStatus NOT IN ('cancelled', 'returned')
+  AND OrderDate >= p_from AND OrderDate < p_to + INTERVAL 1 DAY;
+
+-- the procedure takes the stock down, trg_payment_status moves the order status
+DROP PROCEDURE IF EXISTS sp_place_order;
+DELIMITER //
+CREATE PROCEDURE sp_place_order(IN p_cust INT, IN p_prod INT, IN p_qty INT, IN p_method VARCHAR(20))
+BEGIN
+    DECLARE v_price DECIMAL(10,2);
+    DECLARE v_stock INT;
+    DECLARE v_order INT;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    IF p_qty < 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Quantity must be at least 1';
+    END IF;
+
+    START TRANSACTION;
+    SELECT Price, StockQuantity INTO v_price, v_stock FROM Product WHERE ProductID = p_prod FOR UPDATE;
+
+    IF v_price IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Product not found';
+    END IF;
+    IF v_stock < p_qty THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Product out of stock';
+    END IF;
+
+    INSERT INTO Orders (CustomerID, TotalAmount) VALUES (p_cust, v_price * p_qty);
+    SET v_order = LAST_INSERT_ID();
+
+    INSERT INTO OrderItems (OrderID, ProductID, Quantity, PriceAtPurchase)
+    VALUES (v_order, p_prod, p_qty, v_price);
+
+    UPDATE Product SET StockQuantity = StockQuantity - p_qty WHERE ProductID = p_prod;
+
+    INSERT INTO Payment (OrderID, PaymentMethod, PaymentStatus, AmountPaid)
+    VALUES (v_order, p_method, IF(p_method = 'cash_on_delivery', 'pending', 'success'), v_price * p_qty);
+    COMMIT;
+
+    SELECT * FROM v_customer_order_history WHERE OrderID = v_order;
+END //
+DELIMITER ;
+
+
+-- 6. triggers
+CREATE TABLE IF NOT EXISTS Audit_Log (
+    LogID     INT AUTO_INCREMENT PRIMARY KEY,
+    OrderID   INT,
+    OldStatus VARCHAR(20),
+    NewStatus VARCHAR(20),
+    ChangedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_check_stock;
+DROP TRIGGER IF EXISTS trg_payment_status;
+DROP TRIGGER IF EXISTS trg_order_audit;
+
+DELIMITER //
+CREATE TRIGGER trg_check_stock BEFORE INSERT ON OrderItems FOR EACH ROW
+BEGIN
+    IF NEW.Quantity > (SELECT StockQuantity FROM Product WHERE ProductID = NEW.ProductID) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Product out of stock';
+    END IF;
+END //
+DELIMITER ;
+
+CREATE TRIGGER trg_payment_status AFTER INSERT ON Payment FOR EACH ROW
+UPDATE Orders
+SET OrderStatus = CASE NEW.PaymentStatus WHEN 'success' THEN 'packed' WHEN 'failed' THEN 'cancelled' ELSE OrderStatus END
+WHERE OrderID = NEW.OrderID AND OrderStatus = 'placed';
+
+CREATE TRIGGER trg_order_audit AFTER UPDATE ON Orders FOR EACH ROW
+INSERT INTO Audit_Log (OrderID, OldStatus, NewStatus)
+SELECT OLD.OrderID, OLD.OrderStatus, NEW.OrderStatus FROM DUAL WHERE OLD.OrderStatus <> NEW.OrderStatus;
+
+
+-- test
+CALL sp_place_order(1, 3, 1, 'upi');
+CALL sp_update_stock(3, 5);
+CALL sp_sales_total(CURDATE() - INTERVAL 1 YEAR, CURDATE());
+SELECT fn_customer_spending(1), fn_product_revenue(3);
+SELECT * FROM Audit_Log;
+
+
+-- 7. performance (email is already UNIQUE, so it has an index)
+DROP PROCEDURE IF EXISTS sp_add_index;
+DELIMITER //
+CREATE PROCEDURE sp_add_index(IN p_table VARCHAR(64), IN p_index VARCHAR(64), IN p_cols VARCHAR(200))
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                   WHERE table_schema = DATABASE() AND table_name = p_table AND index_name = p_index) THEN
+        SET @ddl = CONCAT('CREATE INDEX ', p_index, ' ON ', p_table, '(', p_cols, ')');
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END //
+DELIMITER ;
+
+CALL sp_add_index('Product', 'idx_product_name', 'Name');
+CALL sp_add_index('Orders', 'idx_order_customer_date', 'CustomerID, OrderDate');
+DROP PROCEDURE sp_add_index;
+
+EXPLAIN SELECT * FROM Product WHERE Name = 'Air Fryer 4L';
+EXPLAIN SELECT * FROM Customer WHERE Email = 'aarav.sharma@example.com';
+EXPLAIN ANALYZE SELECT * FROM Orders WHERE CustomerID = 1 ORDER BY OrderDate DESC;
+
+
+-- 8. business insights
+-- sales intelligence
+SELECT SUM(TotalAmount) AS TotalRevenue FROM Orders WHERE OrderStatus NOT IN ('cancelled', 'returned');
+
+SELECT * FROM v_sales_report ORDER BY SalesMonth;
+
+SELECT ProductName, QtySold FROM v_product_performance ORDER BY QtySold DESC LIMIT 5;
+
+SELECT cat.CategoryName, SUM(vp.Revenue) AS Revenue
+FROM v_product_performance vp JOIN Category cat ON cat.CategoryID = vp.CategoryID
+GROUP BY cat.CategoryID, cat.CategoryName ORDER BY Revenue DESC LIMIT 5;
+
+-- customer intelligence
+SELECT c.Name, COUNT(o.OrderID) AS Orders, SUM(o.TotalAmount) AS Spent,
+       CASE WHEN SUM(o.TotalAmount) >= 5000 THEN 'High Value'
+            WHEN SUM(o.TotalAmount) >= 1500 THEN 'Regular'
+            ELSE 'Low Value' END AS Segment
+FROM Customer c
+JOIN Orders o ON o.CustomerID = c.CustomerID AND o.OrderStatus NOT IN ('cancelled', 'returned')
+GROUP BY c.CustomerID, c.Name ORDER BY Spent DESC LIMIT 10;
+
+-- inventory intelligence
+SELECT p.Name, p.StockQuantity, v.QtySold,
+       CASE WHEN p.StockQuantity < 30 THEN 'Low Stock'
+            WHEN p.StockQuantity > 250 THEN 'Overstocked'
+            ELSE 'OK' END AS StockStatus
+FROM Product p JOIN v_product_performance v ON v.ProductID = p.ProductID
+ORDER BY v.QtySold DESC;
+
+-- product intelligence
+SELECT p.Name, ROUND(AVG(r.Rating), 2) AS AvgRating, COUNT(*) AS Reviews
+FROM Product p JOIN Review r ON r.ProductID = p.ProductID
+GROUP BY p.ProductID, p.Name ORDER BY AvgRating DESC LIMIT 5;
+
+SELECT p.Name, ROUND(AVG(r.Rating), 2) AS AvgRating
+FROM Product p JOIN Review r ON r.ProductID = p.ProductID
+GROUP BY p.ProductID, p.Name HAVING AVG(r.Rating) < 3;
+
+SELECT Rating, COUNT(*) AS Reviews FROM Review GROUP BY Rating ORDER BY Rating;
